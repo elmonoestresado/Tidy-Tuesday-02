@@ -1,0 +1,279 @@
+---
+title: "TidyTuesday 02: Evolución de la escuelas privadas urbanas en Perú, 2013-2023"
+author: "Elaboración: El mono estresado"
+date: ""
+output: 
+  html_document: 
+    code_folding: hide
+    theme: lumen
+    highlight: espresso
+    toc: TRUE
+    number_section: FALSE
+    toc_depth: 4
+    toc_float: 
+      collapsed: FALSE
+---
+
+```{r Preámbulo, echo=FALSE, message=FALSE, warning=FALSE}
+
+rm(list=ls()) #Limpiar interfase
+options(scipen = 999) #Sin notación científica
+
+```
+
+```{r Librerías}
+
+library(foreign)
+library(openxlsx)
+library(readxl)
+library(tidyverse)
+library(writexl)
+library(tidyr)
+library(dplyr)
+library(gt)
+library(ggplot2)
+library(ggpubr)
+library(purrr)
+library(fst)
+library(haven)
+
+```
+
+```{r Funciones generales}
+
+#Conteo de missing en todas las variables#
+#----------------------------------------#
+
+funmiss <- function(x) {sum(is.na(x))/length(x)*100}
+
+#Redondear#
+#---------#
+
+redondear<-function(x,d=0){
+  (floor(x*10**d)+as.numeric((x*10**d-floor(x*10**d))>=0.5))/10**d
+}
+
+#Cambiar punto por coma decimal#
+#------------------------------#
+
+puntocoma2<-function(x,dec=0){
+  if(is.numeric(x)){
+    if(length(dim(x))==2){
+      gsub("\\.",",",apply(redondear(x,dec), 2, sprintf,fmt=paste0("%.",dec,"f")))
+    }else{gsub("\\.",",",sprintf(paste0("%.",dec,"f"), redondear(x,dec)))}
+  }else{
+    if(length(dim(x))==2){
+      redondear(apply(gsub(",","\\.",x),2,as.numeric),dec)
+    }else{redondear(as.numeric(gsub(",","\\.",x)),dec)}
+  }
+  
+} 
+
+#Ver en Excel#
+#------------#
+
+show_in_excel <- function(.data){
+  tmp <- paste0(tempfile(),".xlsx")
+  write.xlsx(.data,tmp)
+  browseURL(url=tmp)
+}
+
+```
+
+```{r Funciones específicas}
+
+edit_padron1 <- function(bd_padron,anho_etiq){
+  
+  p1 <-  bd_padron %>%
+    filter(NIV_MOD %in% "B0" & FORMAS %in% "S" & GESTION %in% "3" & AREA_MED %in% "1") %>% 
+    group_by(REGION_EDU) %>% 
+    summarise(tot = n()) %>% 
+    mutate(anho = anho_etiq) %>% 
+    rename(nom_dre=REGION_EDU)
+  
+  return(p1)
+}
+
+edit_padron2 <- function(bd_padron,anhos_etiq1){
+  
+  p2 <- bd_padron %>%
+    filter(NIV_MOD %in% "B0" & D_FORMA %in% "Escolarizada" & GESTION %in% "3" & DAREACENSO %in% c("Urbana","Urbano")) %>% 
+    group_by(REGION_EDU) %>% 
+    summarise(tot = n()) %>% 
+    mutate(anho = anhos_etiq1) %>% 
+    rename(nom_dre = REGION_EDU)
+  
+  return(p2)
+}
+
+```
+
+```{r Bases de datos}
+
+padron13 <- read.fst("01 Bases/padron_ce_13.fst")
+padron14 <- read.fst("01 Bases/padron_ce_14.fst")
+padron15 <- read.fst("01 Bases/padron_ce_15.fst")
+padron16 <- read.fst("01 Bases/padron_ce_16.fst") %>% 
+  mutate(REGION_EDU = as.character(REGION_EDU),
+         REGION_EDU = case_when(is.na(REGION_EDU) ~ "DRE CALLAO",
+                                TRUE ~ REGION_EDU))
+padron17 <- read.fst("01 Bases/padron_ce_17.fst")
+padron18 <- read.fst("01 Bases/padron_ce_18.fst") %>% 
+  rename(DAREACENSO=DAREAMED)
+padron19 <- read.fst("01 Bases/padron_ce_19.fst") %>% 
+  rename(DAREACENSO=DAREAMED)
+padron20 <- read.fst("01 Bases/padron_ce_20.fst") %>%
+  filter(D_ESTADO %in% "Activa") %>% 
+  rename(REGION_EDU=D_REGION)
+padron21 <- read.fst("01 Bases/padron_ce_21.fst")
+padron22 <- read.fst("01 Bases/padron_ce_22.fst")
+padron23 <- read.fst("01 Bases/padron_ce_23.fst")
+
+```
+
+```{r Preparación de las bases}
+
+
+# De 2013 a 2017 
+#---------------------
+
+bases_padron <- list(padron13, padron14, padron15, padron16, padron17)
+
+anhos_etiq1 <- as.character(as.vector(c(2013:2017)))
+
+padron1 <- list()
+
+for(i in 1:length(bases_padron)) {
+  
+  
+  padron1[[i]] <- edit_padron1(bases_padron[[i]],anhos_etiq1[[i]])
+
+}
+
+# De 2018 a 2023
+#---------------------
+
+bases_padron2 <- list(padron18, padron19, padron20, padron21, padron22, padron23)
+
+anhos_etiq2 <- as.character(as.vector(c(2018:2023)))
+
+padron2 <- list()
+
+for(i in 1:length(bases_padron2)) {
+  
+  
+  padron2[[i]] <- edit_padron2(bases_padron2[[i]],anhos_etiq2[[i]])
+
+}
+
+# Integrando las bases de datos
+#---------------------
+
+t1 <- rbind(bind_rows(padron1),bind_rows(padron2)) %>% 
+  mutate(nom_dre = case_when(nom_dre %in% "DRE SAN MART\xcdN" ~ "DRE SAN MARTIN",
+                             TRUE ~ nom_dre)) %>% 
+  mutate(indicador = case_when(nom_dre %in% c("DRE CALLAO", "DRE LIMA METROPOLITANA") ~ "Lima Metropolitana y Callao",
+                               TRUE ~ "Resto del Perú")) %>% 
+  group_by(anho, indicador) %>% 
+  summarise(tot = sum(tot, na.rm = T))
+
+# Gráfico
+#---------------------
+
+grafico2 <- ggplot(t1, aes(x=anho, y = tot, group = 1)) + 
+  facet_wrap(vars(indicador)) +
+  geom_line(color = "#6baed6",
+            linewidth = 1.0) + 
+  geom_point(color = "#6baed6",
+             size = 3.0) + 
+  theme_bw() + 
+  theme(panel.grid = element_blank(),
+        axis.title = element_blank(),
+        axis.text.y = element_blank(),
+        axis.ticks.y = element_blank(),
+        axis.text.x = element_text(size = 12),
+        strip.background = element_rect(fill = "transparent",
+                                        color = NA),
+        strip.text = element_text(size = 15),
+        plot.title = element_text(size = 20,
+                                  face = "bold"),
+        plot.subtitle = element_text(size = 13),
+        plot.caption = element_text(hjust = 0)) + 
+  geom_text(aes(label = tot,
+                vjust = case_when(anho %in% c("2019") ~ 1.8,
+                                  TRUE ~ -1.2),
+                hjust = case_when(anho %in% c("2021","2022") ~ -0.2,
+                                  anho %in% c("2019") & indicador %in% "Resto del Perú" ~ -0.2,
+                                  TRUE ~ 0.5)),
+            size = 3.5) + 
+  scale_y_continuous(limits = c(3700,5000)) + 
+  labs(title = str_wrap("Total de escuelas del nivel primaria que son privadas y se encuentran en el área urbana, periodo 2013-2023", width = 90),
+       subtitle = str_wrap("El total de escuela privadas en Lima Metropolitana y Callao no se diferencie tanto del total de escuelas privadas en el área urbana del resto del país. Además, se observa que a partir del año 2020 (año de inicio de la pandemia por COVID-19) el total de escuelas primarias privadas en el área urbana comienza a descender estrepitosamente.", width = 143),
+       caption = "\nFuente: Censo Educativo 2013 a 2023, Ministerio de Educación.")
+
+ggsave(grafico2,
+         filename = "Gráficos/TidyTuesday_02.png",
+         w = 12.0,
+         h = 7.0,
+         dpi = 1000)
+
+```
+
+
+
+
+
+
+
+
+
+
+```{r Gráfico}
+
+orden_dre <- rev(unique(a_int$dre)) #Orden del eje y
+
+grafico1 <- ggplot(a_int, aes(x = new_ptot, y = factor(dre,levels = orden_dre), fill = categoria)) + 
+  geom_col() + 
+  geom_vline(xintercept = 0,
+             color = "#737373") +
+  theme_bw() +
+  theme(panel.grid = element_blank(),
+        panel.border = element_rect(color = "#737373"),
+        axis.title = element_blank(),
+        axis.ticks = element_blank(),
+        axis.text.x = element_blank(),
+        axis.text.y = element_text(size = 10),
+        legend.title = element_blank(),
+        legend.position = "bottom",
+        legend.text = element_text(size = 10),
+        plot.title = element_text(size = 12,
+                                  face = "bold"),
+        plot.subtitle = element_text(size = 10)) +
+  scale_x_continuous(limits = c(-110,110)) +
+  scale_fill_manual(values = c("#ef3b2c","#6baed6"),
+                    breaks = c("Matrícula en escuelas públicas","Escuelas públicas"),
+                    labels = c("% de matrícula en IE públicas", "% de IE públicas")) + 
+  geom_text(aes(label = etiq,
+                hjust = case_when(new_ptot > 0 ~ -0.2,
+                                  TRUE ~ 1.2)),
+            size = 3.0) + 
+  labs(title = "Distribución de matrícula y escuelas en primaria según gestión \nAño 2023",
+       subtitle = str_wrap("La distribución de escuelas públicas y de estudiantes matriculados en estas es diferente a lo largo del territorio peruano. Por ejemplo, en la región de Amazonas el 98,4% de estudiantes de primaria se encuentran matriculados en escuelas públicas. Asimismo, las escuelas públicas representan el 99,2% del total de escuelas en dicha región. En Ica, el 74,3% de estudiantes de la región se encuentran matriculados en escuelas públicas, y estas representan el 59,8% del total de escuelas en la región", width = 120))
+
+ggsave(grafico1,
+         filename = "Gráficos/TidyTuesday_01.png",
+         w = 9.0,
+         h = 8.0,
+         dpi = 1000)
+
+```
+
+
+
+
+
+
+
+
+
+
